@@ -1,0 +1,14 @@
+{
+  "targets": {
+    "kaarp-7be90": {
+      "hosting": {
+        "my-project": [
+          "kaarp-7be90"
+        ]
+      }
+    }
+  },
+  "projects": {
+    "default": "kaarp-7be90"
+  }
+}
