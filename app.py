@@ -3,10 +3,13 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_restx import Api, Resource
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split as tts
-from sklearn.preprocessing import LabelEncoder
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+from keras.preprocessing.sequence import TimeseriesGenerator
+from sklearn.preprocessing import MinMaxScaler
 
 app = Flask(__name__)
 api = Api(app)
@@ -18,35 +21,62 @@ ALLOWED_EXTENSIONS = {'csv'}
 class PredictSales(Resource):
     def post(self):
         file = request.files['file']
-        time_period = request.form['timePeriod']
         
-        df = pd.read_csv(file)
+        # Read the CSV file
+        df = pd.read_csv(file, parse_dates=['Date'], index_col='Date')
         
-        # Split dataset into x and y
-        x = df.loc[:, ('region', 'value')].values
-        y = df.iloc[:, -1].values
+        # Preprocess the data
+        scaler = MinMaxScaler()
+        scaled_data = scaler.fit_transform(df.values.reshape(-1, 1))
         
-        # Use LabelEncoder
-        lab = LabelEncoder()
-        x[:, 0] = lab.fit_transform(x[:, 0])
-        x[:, 1] = lab.fit_transform(x[:, 1])
+        # Define the input parameters for the LSTM model
+        n_input = 12
+        n_features = 1
         
-        # Split data into train and test dataset
-        x_train, x_test, y_train, y_test = tts(x, y, test_size=0.1)
+        generator = TimeseriesGenerator(scaled_data, scaled_data, length=n_input, batch_size=1)
         
-        # Create model
-        model = LinearRegression()
-        model.fit(x_train, y_train)
+        model = Sequential()
+        model.add(LSTM(100, activation='relu', input_shape=(n_input, n_features)))
+        model.add(Dense(1))
+        model.compile(optimizer='adam', loss='mse')
+        model.fit(generator, epochs=50)
         
-        # Check the accuracy of the model
-        y_pred = model.predict(x_test)
-        plt.figure(figsize=(8, 6))
-        plt.scatter(range(len(y_test)), y_test, color='blue', label='Actual')
-        plt.plot(range(len(y_test)), y_pred, color='red', linewidth=2, label='Predicted')
-        plt.xlabel('Data Points')
-        plt.ylabel('Sales')
-        plt.title('Forecasted Sales vs. Actual Sales')
-        plt.legend()
+        time_period = int(request.form['timePeriod'])
+        forecast_generator = TimeseriesGenerator(scaled_data, scaled_data, length=n_input, batch_size=1)
+        forecast = model.predict(forecast_generator)
+        forecast = forecast.flatten()[-time_period:]
+        forecast = scaler.inverse_transform(forecast.reshape(-1, 1)).flatten()
+        
+        # Plot the forecast
+        fig, ax = plt.subplots(figsize=(12, 6)) 
+        
+        forecast_dates = pd.date_range(start=df.index[-1], periods=time_period, freq='M')
+        
+        
+        start_date = pd.to_datetime('1974-01-01')
+        end_date = forecast_dates[-1]
+        x_ticks = pd.date_range(start=start_date, end=end_date, freq='M')
+        x_tick_labels = [date.strftime('%b %Y') for date in x_ticks]
+
+        actual_data = df.loc[df.index >= start_date]
+        ax.plot(actual_data.index, actual_data.values, label='Actual')
+
+        forecast_data = pd.Series(forecast, index=forecast_dates)
+        forecast_data = forecast_data.loc[forecast_data.index >= start_date]
+
+        last_actual_date = actual_data.index[-1]
+        last_actual_value = actual_data.values[-1]
+        forecast_data = pd.concat([pd.Series(last_actual_value, index=[last_actual_date]), forecast_data])
+
+        ax.plot(forecast_data.index, forecast_data.values, label='Forecast')
+
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Sales')
+        ax.set_title('Sales Forecast')
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels(x_tick_labels, rotation='vertical')
+        ax.legend()
+        plt.tight_layout() 
         plt.show()
         
         return 'success'
